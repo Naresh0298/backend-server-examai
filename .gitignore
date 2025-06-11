@@ -1,0 +1,36 @@
+# Remove from git index (but keep local files)
+git rm --cached app/.env
+git rm --cached app/gcs/examai-gcs-ae25c582f730.json
+
+# If you want to keep the files locally, make backup copies first
+cp app/.env app/.env.backup
+cp app/gcs/examai-gcs-ae25c582f730.json app/gcs/examai-gcs-ae25c582f730.json.backup
+
+# Environment variables
+app/.env
+.env
+.env.local
+.env.production
+
+# Google Cloud credentials
+app/gcs/examai-gcs-ae25c582f730.json
+app/gcs/*.json
+
+# Other sensitive files
+config
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Google Cloud credentials
+app/gcs/*.json
+*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
