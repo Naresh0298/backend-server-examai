@@ -1,5 +1,6 @@
 python-multipart
 fastapi
+uvicorn
 dotenv
 google-cloud-storage 
 google-cloud 
