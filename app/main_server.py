@@ -50,6 +50,7 @@ origins = [
     # You might want to add other origins if needed, e.g.:
     "http://169.254.9.73:3000",
     "http://127.0.0.1:3000",
+   
     # "https://examai-frontend.vercel.app/",
     # "http://localhost", # If frontend runs without port sometimes
     # "https://your-production-frontend.com" # For production
