@@ -4,28 +4,35 @@ from google.api_core.exceptions import NotFound # Corrected import for NotFound
 import os
 from typing import Optional, BinaryIO
 import logging
+from google.oauth2 import service_account
+import json
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-
 class GCSService:
     def __init__(self, bucket_name: str, credentials_path: Optional[str] = None):
-        """
-        Initialize GCS service
-        
-        Args:
-            bucket_name: Name of the GCS bucket
-            credentials_path: Path to service account JSON file (optional if using default credentials)
-        """
         self.bucket_name = bucket_name
-        
-        if credentials_path:
-            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credentials_path
-            
-        self.client = storage.Client()
+
+        credentials = None
+
+        if credentials_path and os.path.exists(credentials_path):
+            credentials = service_account.Credentials.from_service_account_file(credentials_path)
+
+        elif "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+            # Try to load JSON from env var
+            try:
+                credentials_info = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+                credentials = service_account.Credentials.from_service_account_info(credentials_info)
+            except json.JSONDecodeError as e:
+                raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS is not valid JSON.") from e
+        else:
+            raise RuntimeError("No valid Google Cloud credentials found.")
+
+        self.client = storage.Client(credentials=credentials, project=credentials.project_id)
         self.bucket = self.client.bucket(bucket_name)
     
     def upload_file(self, file_data: BinaryIO, destination_blob_name: str, content_type: str = None) -> dict:
@@ -187,3 +194,5 @@ class GCSService:
             return blob.exists()
         except Exception:
             return False
+        
+   
