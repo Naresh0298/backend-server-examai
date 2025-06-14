@@ -1,8 +1,5 @@
-# heroku.yml (example for Python FastAPI)
 build:
   docker:
-    web: Dockerfile # If you're using Docker, but likely not if you're asking about yml specifically for Python apps
-  buildpacks:
-    - heroku/python # This tells Heroku to use the Python buildpack
+    web: Dockerfile
 run:
   web: uvicorn app.main_server:app --host 0.0.0.0 --port $PORT
