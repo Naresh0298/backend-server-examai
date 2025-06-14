@@ -1,43 +1,28 @@
-# D:\Projects\Exam Ai\backend\app\main_server.py (or test_server.py)
-
-from dotenv import load_dotenv
 import os
-from fastapi import FastAPI
-from pathlib import Path # Ensure this is imported
+import asyncio
+from motor.motor_asyncio import AsyncIOMotorClient # Import AsyncIOMotorClient
+from pymongo.server_api import ServerApi
 
-# --- THIS IS THE CRITICAL PATH CALCULATION FIX ---
-# Get the directory where the current script (main_server.py) resides:
-# D:\Projects\Exam Ai\backend\app
-current_script_dir = Path(__file__).resolve().parent
+# Replace with your actual connection string
+# It's best to load this from an environment variable
+# For testing, you can hardcode it, but remove it afterward.
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://nareshmahendhar22878:HA6X0KXrl5xk6QQl@exam.uoknysm.mongodb.net/?retryWrites=true&w=majority&appName=exam")
 
-# Go up one level to the 'backend' directory:
-# D:\Projects\Exam Ai\backend
-project_root_dir = current_script_dir.parent
+async def test_mongodb_connection():
+    client = None
+    try:
+        print(f"Attempting to connect to MongoDB using URI: {MONGO_URI}")
+        # Use AsyncIOMotorClient for asynchronous operations
+        client = AsyncIOMotorClient(MONGO_URI, server_api=ServerApi('1'))
+        
+        # Now, client.admin.command('ping') is awaitable
+        await client.admin.command('ping') 
+        print("Successfully connected to MongoDB!")
+    except Exception as e:
+        print(f"MongoDB connection failed: {e}")
+    finally:
+        if client:
+            client.close()
 
-# Combine the project root with the .env filename:
-# D:\Projects\Exam Ai\backend\.env
-env_path = project_root_dir / '.env'
-# --- END CRITICAL PATH CALCULATION FIX ---
-
-
-# Add these debug prints to confirm the path and loading success
-print(f"DEBUG: Attempting to load .env from: {env_path}")
-load_success = load_dotenv(dotenv_path=env_path)
-print(f"DEBUG: load_dotenv() successful: {load_success}")
-
-CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-gcs_bucket_name = os.getenv("GCS_BUCKET_NAME")
-print(f"DEBUG: Value of GOOGLE_APPLICATION_CREDENTIALS after load_dotenv(): {gcs_bucket_name}")
-
-# Your check for the variable
-if not gcs_bucket_name:
-    raise ValueError("GCS_BUCKET_NAME environment variable is required")
-
-# IMPORTANT: Define your FastAPI app instance and name it 'app'
-app = FastAPI()
-
-# Your routes and other application logic go here
-@app.get("/")
-async def read_root():
-    return {f"message": "Welcome to Exam AI backend! " + CREDENTIALS_PATH}
-
+if __name__ == "__main__":
+    asyncio.run(test_mongodb_connection())

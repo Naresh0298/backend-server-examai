@@ -1,5 +1,15 @@
+# heroku.yml (example for Python FastAPI)
 build:
   docker:
-    web: Dockerfile
+    web: Dockerfile # If you're using Docker, but likely not if you're asking about yml specifically for Python apps
+  buildpacks:
+    - heroku/python # This tells Heroku to use the Python buildpack
+release:
+  # This command runs *once* after a successful build, before the web process starts.
+  # Use this for database migrations or other setup tasks.
+  # For your app, it might not be strictly necessary unless you have DB migrations.
+  # If you have migrations, replace 'your_migration_command_here'
+  # command:
+  #   - your_migration_command_here
 run:
   web: uvicorn app.main_server:app --host 0.0.0.0 --port $PORT
