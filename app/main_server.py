@@ -1,182 +1,256 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+# app/main.py (updated)
+
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from typing import List, Optional
 import os
 from datetime import datetime
 import uuid
 import io
-
+import json # For custom JSON encoder
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Load environment variables
-# Load environment variables from .env file
-
-
+# Import GCS, Vision, Claude services
 from .gcs_service import GCSService
-from .vision_service import VisionService # Import the new VisionService
+from .vision_service import VisionService
+from .claude_service import ClaudeService, get_claude_service
+
+# Import MongoDB service and Pydantic models from it
+from .mongodb_service import MongoDB, get_mongodb_service, ExamPaper # Import get_mongodb_service and ExamPaper model
 
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager # For lifespan
+from bson import ObjectId # for _id conversion
+from pydantic import BaseModel # For new request body model
 
-from pathlib import Path
-import os
-from dotenv import load_dotenv
-
+# --- Environment Variable Loading ---
 current_script_dir = Path(__file__).resolve().parent
 backend_dir = current_script_dir.parent
 project_root_dir = backend_dir.parent
 
-env_path = project_root_dir / 'backend/app/.env'
+env_path = project_root_dir / 'backend-server-examai/app/.env'
 
-print(f"DEBUG: Attempting to load .env from: {env_path}")
-# This is the ONLY call needed to load from a specific path
-load_success = load_dotenv(dotenv_path=env_path)
-print(f"DEBUG: load_dotenv() successful: {load_success}")
+# Use this to load environment variables from the specific path
+load_dotenv(dotenv_path=env_path)
 
-# Now, test if your variables are loaded
-# For example, if you have API_KEY in your .env
-# print(f"DEBUG: API_KEY loaded: {os.getenv('API_KEY')}")
-load_dotenv()
-
-
-app = FastAPI(title="File Upload API with GCS and OCR", version="1.0.0")
-
-
-
-# --- CORS Configuration START ---
-# Define the list of origins that should be allowed to make cross-origin requests.
-# You should be specific in production, but for development, localhost:3000 is key.
-origins = [
-    "http://localhost:3000", # Your frontend origin
-    # You might want to add other origins if needed, e.g.:
-    "http://169.254.9.73:3000",
-    "http://127.0.0.1:3000",
-    
-    # "https://examai-frontend.vercel.app/",
-    # "http://localhost", # If frontend runs without port sometimes
-    # "https://your-production-frontend.com" # For production
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,   # List of origins that are allowed to make requests
-    allow_credentials=True, # Allow cookies to be included in requests
-    allow_methods=["*"],    # Allow all standard methods (GET, POST, PUT, etc.)
-    allow_headers=["*"],    # Allow all headers
-)
-# --- CORS Configuration END ---
-
-
-
-# Configuration - Make sure these environment variables are set
+# Ensure required environment variables are loaded
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
 CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_OCR")
+# MONGO_URI and DB_NAME are now primarily read from .env in mongodb_service.py
+# but it's good to keep checks here if main.py directly depends on them
+MONGO_URI = os.getenv("MONGO_URI")
+DB_NAME = os.getenv("MONGO_DB_NAME")
+
 
 if not BUCKET_NAME:
     raise ValueError("GCS_BUCKET_NAME environment variable is required")
+# Removed direct MONGO_URI and DB_NAME checks here as mongodb_service handles defaults/errors
 
 
-# Initialize GCS service
+# --- FastAPI Lifespan (for MongoDB connection) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize and connect MongoDB service during startup
+    mongodb_service = await get_mongodb_service()
+    app.mongodb_service = mongodb_service # Make it accessible on the app object
+    yield
+    # Close MongoDB connection during shutdown
+    await app.mongodb_service.close()
+
+app = FastAPI(title="File Upload API with GCS, OCR, and AI", version="1.0.0", lifespan=lifespan)
+
+# --- CORS Configuration ---
+origins = [
+    "http://localhost:3000",
+    "http://169.254.9.73:3000",
+    "http://127.0.0.1:3000",
+    # Add your Vercel frontend URL for production if needed
+    # "https://examai-frontend.vercel.app",
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Dependency Injections ---
 def get_gcs_service():
-    """Dependency injection for GCSService."""
-    return GCSService(
-        bucket_name=BUCKET_NAME,
-        credentials_path=CREDENTIALS_PATH
-    )
+    return GCSService(bucket_name=BUCKET_NAME, credentials_path=CREDENTIALS_PATH)
 
-# Initialize Vision service
 def get_vision_service():
-    """Dependency injection for VisionService."""
     return VisionService()
 
+# --- Pydantic Models ---
+# Pydantic model for User (if needed), adjusted for ExamPaper
+class User(BaseModel):
+    gen_info: ExamPaper # Change this from str to ExamPaper
+
+# Pydantic model for the new /gen-response endpoint request body
+class GenerateRequest(BaseModel):
+    extracted_text: str
+
+# Custom JSON encoder to handle ObjectId, useful for consistent responses
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        return json.JSONEncoder.default(self, obj)
+
+
+# --- API Endpoints ---
 @app.get("/")
 async def root():
-    return {"message": "File Upload API with Google Cloud Storage and OCR"}
+    return {"message": "File Upload API with Google Cloud Storage, OCR, and AI"}
 
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
     folder: Optional[str] = None,
     gcs_service: GCSService = Depends(get_gcs_service),
-    vision_service: VisionService = Depends(get_vision_service) # Inject VisionService
+    vision_service: VisionService = Depends(get_vision_service),
+    claude_service: ClaudeService = Depends(get_claude_service) # Now get_claude_service correctly injects MongoDB
 ):
     """
-    Upload a file to Google Cloud Storage and perform OCR on it.
-    
-    Args:
-        file: The file to upload.
-        folder: Optional folder path in GCS bucket.
-        
-    Returns:
-        JSON response with upload status, file information, and OCR results.
+    Upload a file to Google Cloud Storage, perform OCR, and then use the extracted text
+    to generate an exam paper with Claude AI.
     """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    original_filename = file.filename
+    file_extension = os.path.splitext(original_filename)[1].lower()
+
+    file_content = await file.read()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    unique_id = str(uuid.uuid4())[:8]
+
+    if folder:
+        destination_blob_name = f"{folder}/{timestamp}_{unique_id}_{original_filename}"
+    else:
+        destination_blob_name = f"{timestamp}_{unique_id}_{original_filename}"
+
+    # --- UPLOAD TO GCS ---
+    gcs_upload_result = gcs_service.upload_file(
+        file_data=io.BytesIO(file_content),
+        destination_blob_name=destination_blob_name,
+        content_type=file.content_type
+    )
+
+    if not gcs_upload_result["success"]:
+        raise HTTPException(
+            status_code=500,
+            detail=f"GCS upload failed: {gcs_upload_result['message']}"
+        )
+
+    gcs_bucket_name = gcs_upload_result.get("bucket", os.getenv("GCS_BUCKET_NAME"))
+    gcs_input_uri = f"gs://{gcs_bucket_name}/{destination_blob_name}"
+
+    ocr_results = {
+        "full_text": "",
+        "structured_data": [],
+        "error": None
+    }
+
+    claude_response = {"exam_paper": None, "error": None}
+
+
+    # --- PERFORM OCR BASED ON FILE TYPE ---
     try:
-        # Validate file
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="No file provided")
-        
-        # Read file content for both GCS upload and OCR
-        file_content = await file.read()
-        file.file.seek(0) # Reset file pointer for subsequent reads if needed, though GCS upload is done
-                          # and vision service uses the read content directly.
+        if file_extension == ".pdf":
+            print(f"Processing PDF from GCS: {gcs_input_uri}")
 
-        # Generate unique filename to avoid conflicts
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        file_extension = os.path.splitext(file.filename)[1]
-        
-        # Create destination blob name
-        if folder:
-            destination_blob_name = f"{folder}/{timestamp}_{unique_id}_{file.filename}"
-        else:
-            destination_blob_name = f"{timestamp}_{unique_id}_{file.filename}"
-        
-        # --- UPLOAD TO GCS ---
-        # The file.file object is an in-memory BytesIO after the first read,
-        # so we pass file_content as BytesIO for GCS to read from.
-        gcs_upload_result = gcs_service.upload_file(
-            file_data=io.BytesIO(file_content), # Pass BytesIO object
-            destination_blob_name=destination_blob_name,
-            content_type=file.content_type
-        )
-        
-        if not gcs_upload_result["success"]:
-            raise HTTPException(
-                status_code=500, 
-                detail=f"GCS upload failed: {gcs_upload_result['message']}"
+            gcs_output_prefix = f"ocr_results/{timestamp}_{unique_id}/"
+            gcs_output_uri = f"gs://{gcs_bucket_name}/{gcs_output_prefix}"
+
+            ocr_operation_result = vision_service.process_pdf_from_gcs(
+                gcs_source_uri=gcs_input_uri,
+                gcs_destination_uri=gcs_output_uri
             )
-        
-        # --- PERFORM OCR ---
-        # You can choose between detect_text (general) or detect_document_text (dense documents)
-        # For exam papers, detect_document_text is usually more appropriate.
-        ocr_result = vision_service.detect_document_text(file_content)
 
-        return JSONResponse(
-            status_code=200,
-            content={
-                "message": "File uploaded and OCR processed successfully",
-                "original_filename": file.filename,
-                "gcs_info": {
-                    "gcs_filename": destination_blob_name,
-                    "bucket": gcs_upload_result["bucket"],
-                    "size": gcs_upload_result["size"],
-                    "content_type": file.content_type
-                },
-                "ocr_results": ocr_result
-            }
-        )
-            
+            if ocr_operation_result["status"] == "completed":
+                print(f"Reading OCR results from GCS output: {gcs_output_uri}")
+                ocr_data = vision_service.read_ocr_results_from_gcs(
+                    gcs_output_uri_prefix=gcs_output_uri,
+                    bucket_name=gcs_bucket_name
+                )
+                ocr_results["full_text"] = ocr_data["full_text"]
+                ocr_results["error"] = ocr_data["error"]
+            else:
+                ocr_results["error"] = ocr_operation_result["error"]
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"PDF OCR operation failed: {ocr_results['error']}"
+                )
+
+        elif file_extension in [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff"]:
+            print(f"Processing image with direct OCR: {original_filename}")
+            ocr_data = vision_service.detect_document_text(file_content)
+            ocr_results["full_text"] = ocr_data["full_text"]
+            ocr_results["error"] = ocr_data["error"]
+
+            if ocr_results["error"]:
+                 raise HTTPException(
+                    status_code=500,
+                    detail=f"Image OCR failed: {ocr_results['error']}"
+                )
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file type for OCR. Only images and PDFs are supported.")
+
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        print(f"An unexpected error occurred during OCR processing: {e}")
+        raise HTTPException(status_code=500, detail=f"An error occurred during OCR processing: {e}")
+
+    # --- Pass extracted text to Claude AI ---
+    if ocr_results["full_text"]:
+        try:
+            print("Sending extracted text to Claude for exam paper generation and storage...")
+            # This will now call generate_and_store_exam_paper which handles DB insertion
+            generated_exam_paper = await claude_service.generate_and_store_exam_paper(ocr_results["full_text"])
+            claude_response["exam_paper"] = generated_exam_paper
+        except RuntimeError as e: # Catch the specific RuntimeError from ClaudeService
+            claude_response["error"] = str(e)
+            print(f"Error during Claude AI generation: {e}")
+        except Exception as e:
+            claude_response["error"] = f"An unexpected error occurred during Claude AI generation: {e}"
+            print(f"An unexpected error occurred during Claude AI generation: {e}")
+    else:
+        claude_response["error"] = "No text extracted from OCR to send to Claude."
+        print("No text extracted from OCR to send to Claude.")
+
+
+    # --- FIX HERE: Apply CustomJSONEncoder to the response content ---
+    response_content = {
+        "message": "File uploaded, OCR processed, and AI generation attempted.",
+        "original_filename": original_filename,
+        "gcs_info": {
+            "gcs_filename": destination_blob_name,
+            "bucket": gcs_upload_result["bucket"],
+            "size": gcs_upload_result["size"],
+            "content_type": file.content_type
+        },
+        "ocr_results": ocr_results,
+        "claude_ai_response": claude_response
+    }
+
+    # Manually dump the content using the CustomJSONEncoder and then load it back
+    # so JSONResponse receives a dict where ObjectIds are already strings.
+    return JSONResponse(
+        status_code=200,
+        content=json.loads(json.dumps(response_content, cls=CustomJSONEncoder))
+    )
 
 @app.post("/upload-multiple")
 async def upload_multiple_files(
     files: List[UploadFile] = File(...),
     folder: Optional[str] = None,
     gcs_service: GCSService = Depends(get_gcs_service),
-    vision_service: VisionService = Depends(get_vision_service) # Inject VisionService
+    vision_service: VisionService = Depends(get_vision_service)
 ):
     """
     Upload multiple files to Google Cloud Storage and perform OCR on each.
@@ -184,33 +258,30 @@ async def upload_multiple_files(
     try:
         if not files:
             raise HTTPException(status_code=400, detail="No files provided")
-        
+
         upload_results = []
-        
+
         for file in files:
             if not file.filename:
                 continue
-            
-            # Read file content for both GCS upload and OCR
+
             file_content = await file.read()
             file.file.seek(0) # Reset file pointer for subsequent reads if needed
 
-            # Generate unique filename
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             unique_id = str(uuid.uuid4())[:8]
-            
+
             if folder:
                 destination_blob_name = f"{folder}/{timestamp}_{unique_id}_{file.filename}"
             else:
                 destination_blob_name = f"{timestamp}_{unique_id}_{file.filename}"
-            
-            # --- UPLOAD TO GCS ---
+
             gcs_upload_result = gcs_service.upload_file(
-                file_data=io.BytesIO(file_content), # Pass BytesIO object
+                file_data=io.BytesIO(file_content),
                 destination_blob_name=destination_blob_name,
                 content_type=file.content_type
             )
-            
+
             file_processed_result = {
                 "original_filename": file.filename,
                 "gcs_filename": destination_blob_name,
@@ -220,12 +291,11 @@ async def upload_multiple_files(
             }
 
             if gcs_upload_result["success"]:
-                # --- PERFORM OCR ---
                 ocr_result = vision_service.detect_document_text(file_content)
                 file_processed_result["ocr_results"] = ocr_result
-            
+
             upload_results.append(file_processed_result)
-        
+
         return JSONResponse(
             status_code=200,
             content={
@@ -233,7 +303,7 @@ async def upload_multiple_files(
                 "results": upload_results
             }
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -243,23 +313,19 @@ async def list_all_files(
 ):
     """
     List all files in the GCS bucket.
-    This endpoint now explicitly lists all files without filtering by folder.
     """
     try:
-        # Call list_files with prefix=None to retrieve all files in the bucket.
         result = gcs_service.list_files(prefix=None)
-        
+
         if result["success"]:
             return JSONResponse(
                 status_code=200,
                 content=result
             )
         else:
-            # If the service indicates failure, raise an HTTP exception.
             raise HTTPException(status_code=500, detail=result["message"])
-            
+
     except Exception as e:
-        # Catch any unexpected errors during the process.
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.delete("/files/{file_path:path}")
@@ -272,7 +338,7 @@ async def delete_file(
     """
     try:
         result = gcs_service.delete_file(file_path)
-        
+
         if result["success"]:
             return JSONResponse(
                 status_code=200,
@@ -280,7 +346,7 @@ async def delete_file(
             )
         else:
             raise HTTPException(status_code=404, detail=result["message"])
-            
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -301,11 +367,63 @@ async def check_file_exists(
                 "exists": exists
             }
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
+# --- User Management (using the new MongoDB service) ---
+@app.post("/api/v1/create-user", response_model=User)
+async def insert_user(user: User, mongodb_service: MongoDB = Depends(get_mongodb_service)):
+    # Corrected check: Check if mongodb_service.db is properly initialized
+    if mongodb_service.db is None: # Corrected check
+        raise HTTPException(status_code=500, detail="Database client not initialized or connected.")
+
+    users_collection = mongodb_service.get_collection("users") # Use the service to get the collection
+    result = await users_collection.insert_one(user.dict())
+    inserted_user_data = await users_collection.find_one({"_id": result.inserted_id})
+
+    # Convert ObjectId to string for Pydantic model response
+    if inserted_user_data:
+        # Use json.dumps with CustomJSONEncoder to ensure ObjectId is serialized correctly
+        return JSONResponse(content=json.loads(json.dumps(inserted_user_data, cls=CustomJSONEncoder)), status_code=200)
+    else:
+        raise HTTPException(status_code=500, detail="Failed to retrieve inserted user data.")
+
+@app.get("/gen")
+async def generate_and_get_latest_exam_paper(
+    # This endpoint now only depends on the MongoDB service to read data
+    mongodb_service: MongoDB = Depends(get_mongodb_service)
+):
+    """
+    Reads the latest exam paper from MongoDB and returns it.
+    This endpoint no longer generates new exam papers.
+    """
+
+    # 1. Fetch the Latest Pushed Data from MongoDB
+    try:
+        exam_paper_collection = mongodb_service.get_collection("exam_papers") # Ensure this matches the collection name in ClaudeService
+        # --- THIS IS WHERE THE DATABASE QUERY BELONGS, INSIDE THE FUNCTION BODY ---
+        latest_paper = await exam_paper_collection.find_one(
+            {}, # Empty query to get all documents
+            sort=[('_id', -1)] # Sort by _id descending to get the latest
+        )
+
+        if latest_paper is None:
+            raise HTTPException(status_code=404, detail="No exam papers found in the database.")
+
+        # Return the latest paper, ensuring ObjectId is serialized
+        return JSONResponse(
+            status_code=200,
+            content=json.loads(json.dumps(latest_paper, cls=CustomJSONEncoder))
+        )
+    except Exception as e:
+        print(f"Error fetching latest exam paper from MongoDB: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve latest exam paper: {e}")
+
+
+
 if __name__ == "__main__":
     import uvicorn
+    # Make sure to run with `uvicorn main:app --reload` to trigger lifespan events
     uvicorn.run(app, host="0.0.0.0", port=8000)
 

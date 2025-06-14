@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class GCSService:
     def __init__(self, bucket_name: str, credentials_path: Optional[str] = None):
         self.bucket_name = bucket_name
+        print("bucket_name",bucket_name)
 
         credentials = None
 
@@ -30,7 +31,7 @@ class GCSService:
             except json.JSONDecodeError as e:
                 raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS is not valid JSON.") from e
         else:
-            raise RuntimeError("No valid Google Cloud credentials found.")
+            raise RuntimeError("No valid Google Cloud credentials found.", credentials_path)
 
         self.client = storage.Client(credentials=credentials, project=credentials.project_id)
         self.bucket = self.client.bucket(bucket_name)
