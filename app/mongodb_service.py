@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- MongoDB Configuration (prioritize env vars) ---
-MONGO_URI = os.getenv("MONGO_CLIENT","mongodb+srv://nareshmahendhar22878:HA6X0KXrl5xk6QQl@exam.uoknysm.mongodb.net/?retryWrites=true&w=majority&appName=exam")
+MONGO_URI = os.getenv("MONGO_CLIENT")
 DB_NAME = os.getenv("MONGO_DB_NAME", "examai")
 
 
