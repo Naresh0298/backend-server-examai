@@ -1,6 +1,69 @@
 from google.cloud import vision
 import io
 import json
+import tempfile
+import os
+
+
+# Global variable to store the path of the temporary credentials file.
+# This ensures it's only created once per process lifecycle.
+_temp_gcloud_credentials_path = None 
+
+def setup_gcloud_credentials():
+    """
+    Reads Google Cloud service account JSON from the GOOGLE_APPLICATION_CREDENTIALS
+    environment variable (which contains the JSON content directly on Heroku),
+    writes it to a temporary file, and then sets the GOOGLE_APPLICATION_CREDENTIALS
+    environment variable to point to the path of this temporary file.
+
+    This ensures the Google Cloud client libraries can find the credentials.
+    """
+    global _temp_gcloud_credentials_path
+
+    # Only set up if not already done in this process
+    if _temp_gcloud_credentials_path and os.path.exists(_temp_gcloud_credentials_path):
+        print(f"DEBUG: Google Cloud credentials already set up at {_temp_gcloud_credentials_path}. Skipping.")
+        return
+
+    # Get the raw JSON content from the environment variable set on Heroku
+    gcloud_key_json = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+
+    if not gcloud_key_json:
+        print("ERROR: GOOGLE_APPLICATION_CREDENTIALS environment variable (containing JSON content) is NOT found.")
+        print("Please ensure it's set correctly as a Heroku Config Var with the full JSON content.")
+        # Raise an error if credentials are critical for your app to function
+        raise ValueError("Google Cloud credentials environment variable is missing.")
+
+    print("DEBUG: GOOGLE_APPLICATION_CREDENTIALS config var content found.")
+    
+    try:
+        # Optional: Verify JSON content is valid
+        json.loads(gcloud_key_json)
+        print("DEBUG: GOOGLE_APPLICATION_CREDENTIALS JSON content appears valid.")
+    except json.JSONDecodeError as e:
+        print(f"CRITICAL ERROR: GOOGLE_APPLICATION_CREDENTIALS JSON content is malformed: {e}")
+        # Print a snippet to help debug malformed JSON in Heroku logs
+        print(f"Content snippet: {gcloud_key_json[:200]}...") 
+        raise ValueError("Malformed Google Cloud credentials JSON.")
+
+    try:
+        # Create a named temporary file to store the credentials.
+        # delete=False ensures the file exists after the 'with' block,
+        # but Heroku's ephemeral filesystem will clean it up on dyno shutdown.
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".json") as temp_file:
+            temp_file.write(gcloud_key_json)
+            _temp_gcloud_credentials_path = temp_file.name # Store the path globally
+
+        # Now, set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+        # to the *path* of the temporary file. This is what Google's client
+        # libraries expect when this env var is present.
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = _temp_gcloud_credentials_path
+        print(f"DEBUG: Successfully created temp GCloud credential file at: {_temp_gcloud_credentials_path}")
+        print(f"DEBUG: os.environ['GOOGLE_APPLICATION_CREDENTIALS'] is now set to: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
+
+    except Exception as e:
+        print(f"CRITICAL ERROR: Failed to set up GCloud credentials from environment variable: {e}")
+        raise # Re-raise the exception to indicate a critical setup failure
 
 class VisionService:
     """
@@ -9,10 +72,20 @@ class VisionService:
     def __init__(self):
         """
         Initializes the VisionService client.
-        The client will automatically use credentials set via
-        GOOGLE_APPLICATION_CREDENTIALS environment variable.
+        Ensures credentials are set up from Heroku Config Vars before client initialization.
         """
+        print("DEBUG: Initializing VisionService __init__.")
+        
+        # This is the CRITICAL line: call the setup function here.
+        setup_gcloud_credentials() 
+
+        # Verify the environment variable again just before client creation
+        if not os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+            print("ERROR: GOOGLE_APPLICATION_CREDENTIALS is NOT set to a file path before client initialization!")
+            raise RuntimeError("Google Cloud credentials file path not set up.")
+
         self.client = vision.ImageAnnotatorClient()
+        print("DEBUG: Google Vision client initialized successfully.")
 
     def detect_document_text(self, image_data: bytes):
         """
