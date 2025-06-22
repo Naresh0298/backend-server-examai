@@ -8,3 +8,6 @@ google-cloud-vision
 anthropic
 pymongo
 motor
+httpx # For Anthropic API calls
+celery
+redis # Or use 'redis-py'
