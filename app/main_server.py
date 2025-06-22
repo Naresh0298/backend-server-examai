@@ -37,7 +37,7 @@ env_path = project_root_dir / 'backend-server-examai/app/.env'
 load_dotenv(dotenv_path=env_path)
 
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
-CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_OCR")
 # MONGO_URI and DB_NAME are now primarily read from .env in mongodb_service.py
 # but it's good to keep checks here if main.py directly depends on them
 MONGO_URI = os.getenv("MONGO_URI")
