@@ -5,18 +5,27 @@ import tempfile
 import os
 
 
+import logging
+# At the top of your file
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG) # Or INFO in production
+
+# Replace print calls
+# print("DEBUG: Initializing VisionService __init__.")
+logger.debug("Initializing VisionService __init__.")
+
 # Global variable to store the path of the temporary credentials file.
 # This ensures it's only created once per process lifecycle.
 _temp_gcloud_credentials_path = None 
 
 def setup_gcloud_credentials():
     """
-    Reads Google Cloud service account JSON from the GOOGLE_APPLICATION_CREDENTIALS
-    environment variable (which contains the JSON content directly on Heroku),
-    writes it to a temporary file, and then sets the GOOGLE_APPLICATION_CREDENTIALS
-    environment variable to point to the path of this temporary file.
-
-    This ensures the Google Cloud client libraries can find the credentials.
+    Reads Google Cloud service account JSON.
+    It first checks the GOOGLE_APPLICATION_CREDENTIALS environment variable.
+    If the variable contains a path to a file, it reads the JSON from that file.
+    If it contains the raw JSON content directly, it uses that.
+    Finally, it sets the GOOGLE_APPLICATION_CREDENTIALS environment variable
+    to point to the path of the (potentially temporary) credentials file.
     """
     global _temp_gcloud_credentials_path
 
@@ -25,45 +34,80 @@ def setup_gcloud_credentials():
         print(f"DEBUG: Google Cloud credentials already set up at {_temp_gcloud_credentials_path}. Skipping.")
         return
 
-    # Get the raw JSON content from the environment variable set on Heroku
-    gcloud_key_json = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    # Get the value from the environment variable
+    # Decide which ENV var to use consistently here. Let's use GOOGLE_APPLICATION_CREDENTIALS for Vision.
+    gcloud_creds_value = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+    # If you want to use GOOGLE_APPLICATION_CREDENTIALS_OCR for Vision, change the line above.
+    # gcloud_creds_value = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_OCR')
 
-    if not gcloud_key_json:
-        print("ERROR: GOOGLE_APPLICATION_CREDENTIALS environment variable (containing JSON content) is NOT found.")
-        print("Please ensure it's set correctly as a Heroku Config Var with the full JSON content.")
-        # Raise an error if credentials are critical for your app to function
+    if not gcloud_creds_value:
+        print("ERROR: GOOGLE_APPLICATION_CREDENTIALS environment variable is NOT found.")
         raise ValueError("Google Cloud credentials environment variable is missing.")
 
-    print("DEBUG: GOOGLE_APPLICATION_CREDENTIALS config var content found.")
-    
-    try:
-        # Optional: Verify JSON content is valid
-        json.loads(gcloud_key_json)
-        print("DEBUG: GOOGLE_APPLICATION_CREDENTIALS JSON content appears valid.")
-    except json.JSONDecodeError as e:
-        print(f"CRITICAL ERROR: GOOGLE_APPLICATION_CREDENTIALS JSON content is malformed: {e}")
-        # Print a snippet to help debug malformed JSON in Heroku logs
-        print(f"Content snippet: {gcloud_key_json[:200]}...") 
-        raise ValueError("Malformed Google Cloud credentials JSON.")
+    gcloud_key_json = None
+    final_credentials_path = None
 
-    try:
-        # Create a named temporary file to store the credentials.
-        # delete=False ensures the file exists after the 'with' block,
-        # but Heroku's ephemeral filesystem will clean it up on dyno shutdown.
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".json") as temp_file:
-            temp_file.write(gcloud_key_json)
-            _temp_gcloud_credentials_path = temp_file.name # Store the path globally
+    # Try to interpret gcloud_creds_value as a file path first
+    # We need to make sure the path is resolved correctly relative to the project root or current working directory.
+    # Let's assume gcloud_creds_value is given as './app/examai-gcs-3f5b91ac17a3.json' from your .env
+    # The current working directory when uvicorn is run is typically the project root (backend-server-examai).
 
-        # Now, set the GOOGLE_APPLICATION_CREDENTIALS environment variable
-        # to the *path* of the temporary file. This is what Google's client
-        # libraries expect when this env var is present.
-        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = _temp_gcloud_credentials_path
-        print(f"DEBUG: Successfully created temp GCloud credential file at: {_temp_gcloud_credentials_path}")
+    # Construct the absolute path to the credentials file
+    # This is critical for local development where the CWD might be 'backend-server-examai'
+    # but the path in .env is relative to 'app'
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..')) # Moves up from 'app' to 'backend-server-examai'
+    potential_file_path = os.path.join(base_dir, gcloud_creds_value.lstrip('./')) # Remove leading ./ if present
+
+    # Check if the value is a valid file path and the file exists
+    if os.path.exists(potential_file_path) and os.path.isfile(potential_file_path):
+        print(f"DEBUG: GOOGLE_APPLICATION_CREDENTIALS appears to be a file path: {potential_file_path}")
+        try:
+            with open(potential_file_path, 'r') as f:
+                gcloud_key_json = f.read()
+            final_credentials_path = potential_file_path # No need for a temp file if it's already a local file
+            print(f"DEBUG: Using GCloud credential file directly from: {final_credentials_path}")
+        except FileNotFoundError:
+            print(f"CRITICAL ERROR: Credentials file not found at {potential_file_path}")
+            raise
+        except Exception as e:
+            print(f"CRITICAL ERROR: Failed to read from credentials file {potential_file_path}: {e}")
+            raise ValueError(f"Failed to read from credentials file: {e}")
+    else:
+        # If it's not a file path, assume it's the direct JSON content (original Heroku-like logic)
+        print("DEBUG: GOOGLE_APPLICATION_CREDENTIALS content found (assuming direct JSON).")
+        gcloud_key_json = gcloud_creds_value
+        # For direct JSON, we still need to write it to a temp file for the client library
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".json") as temp_file:
+                temp_file.write(gcloud_key_json)
+                final_credentials_path = temp_file.name # Store the path globally
+            print(f"DEBUG: Successfully created temp GCloud credential file at: {final_credentials_path}")
+        except Exception as e:
+            print(f"CRITICAL ERROR: Failed to write GCloud credentials to temporary file: {e}")
+            raise # Re-raise to stop execution
+
+    # Verify the JSON content's validity, regardless of whether it came from a file or direct env var
+    if gcloud_key_json:
+        try:
+            json.loads(gcloud_key_json)
+            print("DEBUG: GCloud credentials JSON content appears valid.")
+        except json.JSONDecodeError as e:
+            print(f"CRITICAL ERROR: GCloud credentials JSON content is malformed: {e}")
+            print(f"Content snippet: {gcloud_key_json[:200]}...") # Print a snippet for debugging
+            raise ValueError("Malformed Google Cloud credentials JSON.")
+    else:
+        # This case should ideally not be hit if gcloud_creds_value was found
+        raise ValueError("No Google Cloud credentials content could be determined.")
+
+    # Finally, set the GOOGLE_APPLICATION_CREDENTIALS environment variable
+    # to the *path* that the Google Cloud client libraries expect.
+    if final_credentials_path:
+        os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = final_credentials_path
         print(f"DEBUG: os.environ['GOOGLE_APPLICATION_CREDENTIALS'] is now set to: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
+        _temp_gcloud_credentials_path = final_credentials_path # Update the global variable
+    else:
+        raise RuntimeError("Failed to determine a final path for Google Cloud credentials.")
 
-    except Exception as e:
-        print(f"CRITICAL ERROR: Failed to set up GCloud credentials from environment variable: {e}")
-        raise # Re-raise the exception to indicate a critical setup failure
 
 class VisionService:
     """

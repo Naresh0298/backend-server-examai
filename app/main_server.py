@@ -25,11 +25,16 @@ from bson import ObjectId # for _id conversion
 from pydantic import BaseModel # For new request body model
 
 # --- Environment Variable Loading ---
-current_script_dir = Path(__file__).resolve().parent
-backend_dir = current_script_dir.parent
-project_root_dir = backend_dir.parent
+from pathlib import Path
+from dotenv import load_dotenv
+import os
 
-env_path = project_root_dir / 'backend-server-examai/app/.env'
+current_script_dir = Path(__file__).resolve().parent # This is /Users/naresh/Documents/Projects/BACKEND-SERVER-EXAMAI/app/
+backend_dir = current_script_dir.parent             # This is /Users/naresh/Documents/Projects/BACKEND-SERVER-EXAMAI/
+project_root_dir = backend_dir.parent               # This is /Users/naresh/Documents/Projects/
+
+env_path = project_root_dir / 'backend-server-examai/app/.env' # 
+
 
 # Use this to load environment variables from the specific path
 load_dotenv(dotenv_path=env_path)
