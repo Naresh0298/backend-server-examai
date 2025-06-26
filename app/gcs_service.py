@@ -18,18 +18,18 @@ class GCSService:
         self.bucket_name = bucket_name
         print("bucket_name",bucket_name)
 
-        credentials = None
+        # credentials = None
 
-        # if credentials_path and os.path.exists(credentials_path):
-        #     credentials = service_account.Credentials.from_service_account_file(credentials_path)
+        if credentials_path and os.path.exists(credentials_path):
+            credentials = service_account.Credentials.from_service_account_file(credentials_path)
 
-        if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+        elif "GOOGLE_APPLICATION_CREDENTIALS_OCR" in os.environ:
             # Try to load JSON from env var
             try:
-                credentials_info = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+                credentials_info = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS_OCR"])
                 credentials = service_account.Credentials.from_service_account_info(credentials_info)
             except json.JSONDecodeError as e:
-                raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS is not valid JSON.") from e
+                raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_OCR is not valid JSON.") from e
         else:
             raise RuntimeError("No valid Google Cloud credentials found.", credentials_path)
 
