@@ -37,4 +37,9 @@ EXPOSE 8000
 # "app.main_server:app" is the Python import path to your FastAPI application instance.
 # --host 0.0.0.0: Binds the server to all network interfaces within the container.
 # --port $PORT: CRITICAL for Heroku! Uses the port assigned by Heroku environment variable.
-CMD ["uvicorn", "app.main_server:app", "--host", "0.0.0.0", "--port", "$PORT"]
+CMD ["uvicorn", "app.main_server:app", "--host", "0.0.0.0", "--port", "${PORT}"]
+
+# The commented-out Gunicorn CMD is an alternative for production deployments,
+# offering more robust process management. If you switch to this, ensure gunicorn
+# is in your requirements.txt and adjust "main:app" if your app path differs.
+# # CMD ['gunicorn' main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT]
