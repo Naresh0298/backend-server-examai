@@ -28,16 +28,26 @@ from .celery_worker import celery_app
 from .tasks import process_document_task # Import your specific task
 
 # --- Environment Variable Loading ---
-current_script_dir = Path(__file__).resolve().parent
-backend_dir = current_script_dir.parent
-project_root_dir = backend_dir.parent
+from pathlib import Path
+from dotenv import load_dotenv
+import os
 
-env_path = project_root_dir / 'backend-server-examai/app/.env'
+# current_script_dir = Path(__file__).resolve().parent # This is /Users/naresh/Documents/Projects/BACKEND-SERVER-EXAMAI/app/
+# backend_dir = current_script_dir.parent             # This is /Users/naresh/Documents/Projects/BACKEND-SERVER-EXAMAI/
+# project_root_dir = backend_dir.parent               # This is /Users/naresh/Documents/Projects/
 
-load_dotenv(dotenv_path=env_path)
+# env_path = project_root_dir / 'backend-server-examai/app/.env' # 
+
+
+
+# Use this to load environment variables from the specific path
+# load_dotenv(dotenv_path=env_path)
+
 
 BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
 CREDENTIALS_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_OCR")
+#---------------------------------------
+
 # MONGO_URI and DB_NAME are now primarily read from .env in mongodb_service.py
 # but it's good to keep checks here if main.py directly depends on them
 MONGO_URI = os.getenv("MONGO_URI")
