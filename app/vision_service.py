@@ -380,4 +380,3 @@ class VisionService:
             "structured_data": pages_data_combined,
             "error": None
         }
-
