@@ -14,29 +14,27 @@ logger = logging.getLogger(__name__)
 
 
 class GCSService:
-    def __init__(self, bucket_name: str, credentials_path: str = None):
+    def __init__(self, bucket_name: str, credentials_path: Optional[str] = None):
         self.bucket_name = bucket_name
+        print("bucket_name",bucket_name)
 
-        # Prioritize credentials_path if provided
-        if credentials_path:
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
-            print(f"DEBUG: GOOGLE_APPLICATION_CREDENTIALS set to: {credentials_path}")
-        elif "GOOGLE_APPLICATION_CREDENTIALS" in os.environ and os.path.exists(os.environ["GOOGLE_APPLICATION_CREDENTIALS"]):
-            # If already set to an existing file, do nothing
-            print(f"DEBUG: GOOGLE_APPLICATION_CREDENTIALS already set to existing file: {os.environ['GOOGLE_APPLICATION_CREDENTIALS']}")
+        credentials = None
+
+        # if credentials_path and os.path.exists(credentials_path):
+        #     credentials = service_account.Credentials.from_service_account_file(credentials_path)
+
+        if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+            # Try to load JSON from env var
+            try:
+                credentials_info = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
+                credentials = service_account.Credentials.from_service_account_info(credentials_info)
+            except json.JSONDecodeError as e:
+                raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS is not valid JSON.") from e
         else:
-            # This branch should ideally not be hit if environment is correctly configured
-            # Or, if you MUST embed JSON directly, handle it carefully
-            raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set or does not point to a valid file path.")
+            raise RuntimeError("No valid Google Cloud credentials found.", credentials_path)
 
-        try:
-            self.client = storage.Client()
-            print("DEBUG: Google Cloud Storage client initialized successfully.")
-        except Exception as e:
-            print(f"ERROR: Failed to initialize Google Cloud Storage client: {e}")
-            raise RuntimeError(f"Failed to initialize Google Cloud Storage client: {e}")
-
-        self.bucket = self.client.bucket(self.bucket_name)
+        self.client = storage.Client(credentials=credentials, project=credentials.project_id)
+        self.bucket = self.client.bucket(bucket_name)
     
     def upload_file(self, file_data: BinaryIO, destination_blob_name: str, content_type: str = None) -> dict:
         """
