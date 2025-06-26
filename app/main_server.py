@@ -111,6 +111,18 @@ class CustomJSONEncoder(json.JSONEncoder):
 async def root():
     return {"message": "File Upload API with Google Cloud Storage, OCR, and AI"}
 
+from datetime import datetime, timezone
+
+@app.get("/health")
+async def health_check():
+    """
+    A simple health check endpoint
+    Returns 200 Ok if application is running.
+    """
+    current_utc_time = datetime.now(timezone.utc).isoformat()
+    return {"status" : "OK ","timestamp":current_utc_time}
+
+
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
